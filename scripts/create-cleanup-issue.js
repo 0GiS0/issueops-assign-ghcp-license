@@ -14,32 +14,55 @@ module.exports = async ({ github, context, core }) => {
   const inactiveCount = process.env.INACTIVE_COUNT;
   const totalSeats = process.env.TOTAL_SEATS;
 
-  let table = '| User | Last Activity |\n|------|---------------|\n';
-  for (const u of inactive) {
-    table += `| @${u.login} | ${u.last_activity} |\n`;
-  }
+  const total = parseInt(totalSeats, 10) || 0;
+  const inactiveNum = parseInt(inactiveCount, 10) || 0;
+  const active = total - inactiveNum;
+
+  let table = '| # | User | Last Activity |\n|--:|------|---------------|\n';
+  inactive.forEach((u, i) => {
+    table += `| ${i + 1} | @${u.login} | ${u.last_activity} |\n`;
+  });
 
   const title = dryRun
     ? `[Copilot] Inactivity report (${inactiveCount} users)`
     : `[Copilot] Revoked ${inactiveCount} inactive seats`;
 
-  const mode = dryRun ? 'Dry run (no changes)' : 'Revocations applied';
+  const modeLabel = dryRun
+    ? ':test_tube: Dry run — no changes were made'
+    : ':warning: Revocations applied';
+
+  const modeNote = dryRun
+    ? '> **Note:** This was a dry run. No seats were revoked.'
+    : '> **Action taken:** Seats have been revoked for the users listed above.';
 
   const body = [
-    '## Copilot Seat Cleanup Report',
+    `# :bar_chart: Copilot Seat Cleanup Report`,
     '',
-    `**Organization:** ${org}`,
-    `**Inactivity threshold:** ${inactivityDays} days`,
-    `**Mode:** ${mode}`,
-    `**Total seats:** ${totalSeats}`,
-    `**Inactive users:** ${inactiveCount}`,
+    `> **Mode:** ${modeLabel}`,
     '',
-    '### Inactive Users',
+    '---',
+    '',
+    '## Overview',
+    '',
+    '| | Metric | Value |',
+    '|---|--------|------:|',
+    `| :office: | Organization | \`${org}\` |`,
+    `| :calendar: | Inactivity threshold | **${inactivityDays}** days |`,
+    `| :busts_in_silhouette: | Total seats | **${total}** |`,
+    `| :green_circle: | Active users | **${active}** |`,
+    `| :red_circle: | Inactive users | **${inactiveNum}** |`,
+    '',
+    '---',
+    '',
+    `## :busts_in_silhouette: Inactive Users (${inactiveNum})`,
+    '',
+    '<details>',
+    '<summary>Click to expand the full list</summary>',
     '',
     table,
-    dryRun
-      ? '> This was a dry run. No seats were revoked.'
-      : '> Seats have been revoked for the users listed above.',
+    '</details>',
+    '',
+    modeNote,
   ].join('\n');
 
   await github.rest.issues.create({

@@ -29,5 +29,5 @@ body:
       options:
         - label: "I confirm this user is (or will be) a member of the AgenticGroot organization."
           required: true
-        - label: "I understand that only organization owners can execute /copilot-assign."
+        - label: "I understand that only organization owners can execute .copilot-assign."
           required: true

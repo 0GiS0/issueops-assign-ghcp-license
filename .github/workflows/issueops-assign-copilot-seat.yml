@@ -4,21 +4,6 @@ on:
   issue_comment:
     types: [created]
 
-  # Manual test / break-glass
-  workflow_dispatch:
-    inputs:
-      command:
-        description: "copilot-assign or copilot-status"
-        required: true
-        type: choice
-        options:
-          - copilot-assign
-          - copilot-status
-      username:
-        description: "Target GitHub username (without @)"
-        required: true
-        type: string
-
 permissions:
   issues: write
 
@@ -35,138 +20,45 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 🔍 Determine command + target user
+      - name: 🔍 Check /copilot-assign command
+        uses: github/command@v1.2.2
+        id: command
+        with:
+          command: ".copilot-assign"
+          reaction: "rocket"
+          allowed_contexts: "issue"
+          permissions: "admin"
+
+      - name: 🔍 Extract target user from Issue Form
         id: parse
         uses: actions/github-script@v7
         with:
           script: |
-            const org = process.env.ORG;
-
-            function parseSlash(body) {
-              const trimmed = (body || "").trim();
-              const mAssign = trimmed.match(/^\/copilot-assign(?:\s+@?([A-Za-z0-9-]{1,39}))?\s*$/i);
-              if (mAssign) return { command: 'copilot-assign', user: mAssign[1] || null };
-
-              const mStatus = trimmed.match(/^\/copilot-status(?:\s+@?([A-Za-z0-9-]{1,39}))\s*$/i);
-              if (mStatus) return { command: 'copilot-status', user: mStatus[1] || null };
-
-              return null;
-            }
-
-            function parseUserFromIssueForm(issueBody) {
-              const body = issueBody || "";
-              // GitHub Issue Forms render as markdown headings, e.g.:
-              // ### GitHub username\n\n<value>
-              const m = body.match(/###\s*GitHub username\s*[\r\n]+([\s\S]*?)(?:\r?\n\r?\n|\r?\n###\s|$)/i);
-              if (!m) return null;
-
-              const firstLine = m[1]
-                .split(/\r?\n/)
-                .map(l => l.trim())
-                .filter(Boolean)[0];
-
-              if (!firstLine) return null;
-              return firstLine.replace(/^@/, '').trim();
-            }
-
-            let command, target;
-
-            if (context.eventName === 'workflow_dispatch') {
-              command = context.payload.inputs?.command;
-              target = context.payload.inputs?.username;
-            } else {
-              const commentBody = context.payload.comment?.body;
-              const parsed = parseSlash(commentBody);
-              if (!parsed) {
-                core.info('No matching slash command found; skipping.');
-                core.setOutput('skip', 'true');
-                return;
-              }
-
-              command = parsed.command;
-              target = parsed.user || parseUserFromIssueForm(context.payload.issue?.body);
-            }
-
-            if (!target) {
-              core.setFailed('Could not determine target username (provide @user or fill the Issue Form field).');
+            const body = context.payload.issue?.body || "";
+            const m = body.match(/###\s*GitHub username\s*[\r\n]+([\s\S]*?)(?:\r?\n\r?\n|\r?\n###\s|$)/i);
+            if (!m) {
+              core.setFailed('Could not find GitHub username in issue form.');
               return;
             }
-
-            target = target.replace(/^@/, '').trim();
-            if (!/^[A-Za-z0-9-]{1,39}$/.test(target)) {
-              core.setFailed(`Invalid GitHub username: ${target}`);
+            const firstLine = m[1].split(/\r?\n/).map(l => l.trim()).filter(Boolean)[0];
+            if (!firstLine) {
+              core.setFailed('GitHub username field is empty.');
               return;
             }
-
-            core.setOutput('skip', 'false');
-            core.setOutput('command', command);
+            const target = firstLine.replace(/^@/, '').trim();
             core.setOutput('target', target);
-            core.setOutput('org', org);
+            core.setOutput('org', process.env.ORG);
 
       - name: 🔑 Create GitHub App token
         id: app-token
-        if: steps.parse.outputs.skip != 'true'
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ vars.COPILOT_APP_ID }}
           private-key: ${{ secrets.COPILOT_APP_PRIVATE_KEY }}
           owner: ${{ env.ORG }}
 
-      - name: 🛡️ Verify commenter is org owner
-        id: authz
-        if: steps.parse.outputs.skip != 'true' && github.event_name == 'issue_comment'
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          ORG: ${{ steps.parse.outputs.org }}
-          ACTOR: ${{ github.actor }}
-        run: |
-          set -euo pipefail
-          role=$(gh api \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: $API_VERSION" \
-            "/orgs/$ORG/memberships/$ACTOR" \
-            --jq .role)
-          if [[ "$role" != "admin" ]]; then
-            echo "authorized=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "authorized=true" >> "$GITHUB_OUTPUT"
-
-      - name: ⛔ Comment and stop (not authorized)
-        if: steps.parse.outputs.skip != 'true' && github.event_name == 'issue_comment' && steps.authz.outputs.authorized != 'true'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.payload.issue.number,
-              body: `Not authorized: only organization owners can run \\`/copilot-assign\\` for ${process.env.ORG}.`,
-            });
-
-      - name: 🚫 Stop when not authorized
-        if: steps.parse.outputs.skip != 'true' && github.event_name == 'issue_comment' && steps.authz.outputs.authorized != 'true'
-        run: exit 1
-
-      - name: 📊 Copilot seat status
-        if: steps.parse.outputs.skip != 'true' && steps.parse.outputs.command == 'copilot-status'
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          ORG: ${{ steps.parse.outputs.org }}
-          USER: ${{ steps.parse.outputs.target }}
-        run: |
-          set -euo pipefail
-          echo "Checking seat status for @$USER in $ORG"
-          gh api \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: $API_VERSION" \
-            "/orgs/$ORG/members/$USER/copilot" \
-            --jq '{plan_type, pending_cancellation_date, last_activity_at, last_activity_editor, assigning_team, assignee: .assignee.login}' \
-            | jq .
-
       - name: ✨ Copilot seat assign
         id: assign
-        if: steps.parse.outputs.skip != 'true' && steps.parse.outputs.command == 'copilot-assign'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           ORG: ${{ steps.parse.outputs.org }}
@@ -210,7 +102,6 @@ jobs:
           echo "message=Seat assignment requested for @$USER." >> "$GITHUB_OUTPUT"
 
       - name: 💬 Comment + label + close
-        if: steps.parse.outputs.skip != 'true' && steps.parse.outputs.command == 'copilot-assign'
         uses: actions/github-script@v7
         env:
           RESULT: ${{ steps.assign.outputs.result }}

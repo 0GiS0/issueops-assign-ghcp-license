@@ -1,0 +1,1 @@
+Si tienes que lanzar un comando con Github CLI usa GH_PAGER=cat para evitar que se abra un pager y se quede bloqueado el agente esperando a que se cierre el pager.

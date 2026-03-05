@@ -1,0 +1,33 @@
+name: "Request GitHub Copilot seat"
+description: "IssueOps request to assign a GitHub Copilot seat in the AgenticGroot org"
+title: "[Copilot] Seat request for <github_username>"
+labels:
+  - copilot-seat-request
+body:
+  - type: input
+    id: github_username
+    attributes:
+      label: GitHub username
+      description: "GitHub login of the organization member who should receive a Copilot seat (e.g. octocat)."
+      placeholder: "octocat"
+    validations:
+      required: true
+
+  - type: textarea
+    id: justification
+    attributes:
+      label: Justification
+      description: "Optional context for auditing and troubleshooting."
+      placeholder: "Why do you need Copilot?"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: requester_ack
+    attributes:
+      label: Acknowledgements
+      options:
+        - label: "I confirm this user is (or will be) a member of the AgenticGroot organization."
+          required: true
+        - label: "I understand that only organization owners can execute /copilot-assign."
+          required: true

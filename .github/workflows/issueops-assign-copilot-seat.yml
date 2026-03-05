@@ -1,0 +1,274 @@
+name: "🤖 IssueOps: Assign Copilot seat"
+
+on:
+  issue_comment:
+    types: [created]
+
+  # Manual test / break-glass
+  workflow_dispatch:
+    inputs:
+      command:
+        description: "copilot-assign or copilot-status"
+        required: true
+        type: choice
+        options:
+          - copilot-assign
+          - copilot-status
+      username:
+        description: "Target GitHub username (without @)"
+        required: true
+        type: string
+
+permissions:
+  issues: write
+
+concurrency:
+  group: copilot-seat-${{ github.event.issue.number || github.run_id }}
+  cancel-in-progress: false
+
+env:
+  ORG: ${{ github.repository_owner }}
+  API_VERSION: "2022-11-28"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 🔍 Determine command + target user
+        id: parse
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const org = process.env.ORG;
+
+            function parseSlash(body) {
+              const trimmed = (body || "").trim();
+              const mAssign = trimmed.match(/^\/copilot-assign(?:\s+@?([A-Za-z0-9-]{1,39}))?\s*$/i);
+              if (mAssign) return { command: 'copilot-assign', user: mAssign[1] || null };
+
+              const mStatus = trimmed.match(/^\/copilot-status(?:\s+@?([A-Za-z0-9-]{1,39}))\s*$/i);
+              if (mStatus) return { command: 'copilot-status', user: mStatus[1] || null };
+
+              return null;
+            }
+
+            function parseUserFromIssueForm(issueBody) {
+              const body = issueBody || "";
+              // GitHub Issue Forms render as markdown headings, e.g.:
+              // ### GitHub username\n\n<value>
+              const m = body.match(/###\s*GitHub username\s*[\r\n]+([\s\S]*?)(?:\r?\n\r?\n|\r?\n###\s|$)/i);
+              if (!m) return null;
+
+              const firstLine = m[1]
+                .split(/\r?\n/)
+                .map(l => l.trim())
+                .filter(Boolean)[0];
+
+              if (!firstLine) return null;
+              return firstLine.replace(/^@/, '').trim();
+            }
+
+            let command, target;
+
+            if (context.eventName === 'workflow_dispatch') {
+              command = context.payload.inputs?.command;
+              target = context.payload.inputs?.username;
+            } else {
+              const commentBody = context.payload.comment?.body;
+              const parsed = parseSlash(commentBody);
+              if (!parsed) {
+                core.info('No matching slash command found; skipping.');
+                core.setOutput('skip', 'true');
+                return;
+              }
+
+              command = parsed.command;
+              target = parsed.user || parseUserFromIssueForm(context.payload.issue?.body);
+            }
+
+            if (!target) {
+              core.setFailed('Could not determine target username (provide @user or fill the Issue Form field).');
+              return;
+            }
+
+            target = target.replace(/^@/, '').trim();
+            if (!/^[A-Za-z0-9-]{1,39}$/.test(target)) {
+              core.setFailed(`Invalid GitHub username: ${target}`);
+              return;
+            }
+
+            core.setOutput('skip', 'false');
+            core.setOutput('command', command);
+            core.setOutput('target', target);
+            core.setOutput('org', org);
+
+      - name: 🔑 Create GitHub App token
+        id: app-token
+        if: steps.parse.outputs.skip != 'true'
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.COPILOT_APP_ID }}
+          private-key: ${{ secrets.COPILOT_APP_PRIVATE_KEY }}
+          owner: ${{ env.ORG }}
+
+      - name: 🛡️ Verify commenter is org owner
+        id: authz
+        if: steps.parse.outputs.skip != 'true' && github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          ORG: ${{ steps.parse.outputs.org }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          role=$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: $API_VERSION" \
+            "/orgs/$ORG/memberships/$ACTOR" \
+            --jq .role)
+          if [[ "$role" != "admin" ]]; then
+            echo "authorized=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "authorized=true" >> "$GITHUB_OUTPUT"
+
+      - name: ⛔ Comment and stop (not authorized)
+        if: steps.parse.outputs.skip != 'true' && github.event_name == 'issue_comment' && steps.authz.outputs.authorized != 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body: `Not authorized: only organization owners can run \\`/copilot-assign\\` for ${process.env.ORG}.`,
+            });
+
+      - name: 🚫 Stop when not authorized
+        if: steps.parse.outputs.skip != 'true' && github.event_name == 'issue_comment' && steps.authz.outputs.authorized != 'true'
+        run: exit 1
+
+      - name: 📊 Copilot seat status
+        if: steps.parse.outputs.skip != 'true' && steps.parse.outputs.command == 'copilot-status'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          ORG: ${{ steps.parse.outputs.org }}
+          USER: ${{ steps.parse.outputs.target }}
+        run: |
+          set -euo pipefail
+          echo "Checking seat status for @$USER in $ORG"
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: $API_VERSION" \
+            "/orgs/$ORG/members/$USER/copilot" \
+            --jq '{plan_type, pending_cancellation_date, last_activity_at, last_activity_editor, assigning_team, assignee: .assignee.login}' \
+            | jq .
+
+      - name: ✨ Copilot seat assign
+        id: assign
+        if: steps.parse.outputs.skip != 'true' && steps.parse.outputs.command == 'copilot-assign'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          ORG: ${{ steps.parse.outputs.org }}
+          USER: ${{ steps.parse.outputs.target }}
+        run: |
+          set -euo pipefail
+
+          echo "Validating org membership for @$USER in $ORG"
+          state=$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: $API_VERSION" \
+            "/orgs/$ORG/memberships/$USER" \
+            --jq .state || true)
+
+          if [[ "$state" != "active" ]]; then
+            echo "result=error" >> "$GITHUB_OUTPUT"
+            echo "message=User @$USER is not an active member of $ORG (state: ${state:-unknown})." >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Checking if seat already exists"
+          if gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: $API_VERSION" \
+            "/orgs/$ORG/members/$USER/copilot" >/dev/null 2>&1; then
+            echo "result=already_assigned" >> "$GITHUB_OUTPUT"
+            echo "message=Seat already assigned to @$USER." >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Assigning seat"
+          gh api -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: $API_VERSION" \
+            "/orgs/$ORG/copilot/billing/selected_users" \
+            -f "selected_usernames[]=$USER" \
+            --jq . \
+            | jq .
+
+          echo "result=assigned" >> "$GITHUB_OUTPUT"
+          echo "message=Seat assignment requested for @$USER." >> "$GITHUB_OUTPUT"
+
+      - name: 💬 Comment + label + close
+        if: steps.parse.outputs.skip != 'true' && steps.parse.outputs.command == 'copilot-assign'
+        uses: actions/github-script@v7
+        env:
+          RESULT: ${{ steps.assign.outputs.result }}
+          MESSAGE: ${{ steps.assign.outputs.message }}
+          USER: ${{ steps.parse.outputs.target }}
+        with:
+          script: |
+            const issue_number = context.payload.issue?.number;
+            if (!issue_number) {
+              core.info('No issue in context; skipping comment/label/close.');
+              return;
+            }
+
+            const result = process.env.RESULT || 'error';
+            const msg = process.env.MESSAGE || 'Unknown error.';
+            const labels = [];
+
+            if (result === 'assigned' || result === 'already_assigned') labels.push('copilot-assigned');
+            else labels.push('copilot-error');
+
+            // Ensure labels exist (best-effort)
+            for (const name of ['copilot-assigned', 'copilot-error', 'copilot-seat-request']) {
+              try {
+                await github.rest.issues.getLabel({ owner: context.repo.owner, repo: context.repo.repo, name });
+              } catch (e) {
+                try {
+                  await github.rest.issues.createLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    name,
+                    color: name.includes('error') ? 'd73a4a' : '0e8a16',
+                    description: 'Managed by IssueOps Copilot seat workflow',
+                  });
+                } catch (e2) {
+                  // ignore
+                }
+              }
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number,
+              body: `Copilot seat request for @${process.env.USER}: **${result}**\n\n${msg}`,
+            });
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number,
+              labels,
+            });
+
+            if (result === 'assigned' || result === 'already_assigned') {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number,
+                state: 'closed',
+              });
+            }

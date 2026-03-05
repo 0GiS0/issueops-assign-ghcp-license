@@ -1,48 +1,191 @@
-# issueops-assign-ghcp-license
+# IssueOps: Gestión de Licencias GitHub Copilot
 
-IssueOps workflow to assign a **GitHub Copilot Business/Enterprise** seat to an org member via issue comments.
+<div align="center">
 
-## How it works
-1. Create a request using the issue form: **Request GitHub Copilot seat**.
-2. An **organization owner** comments on the issue:
-   - `/copilot-assign` (uses the username from the issue form)
-   - `/copilot-assign @octocat` (explicit override)
-   - (optional) `/copilot-status @octocat`
-3. The workflow validates the commenter is an org owner, then calls the Copilot seat management REST API.
+[![YouTube Channel Subscribers](https://img.shields.io/youtube/channel/subscribers/UC140iBrEZbOtvxWsJ-Tb0lQ?style=for-the-badge&logo=youtube&logoColor=white&color=red)](https://www.youtube.com/c/GiselaTorres?sub_confirmation=1)
+[![GitHub followers](https://img.shields.io/github/followers/0GiS0?style=for-the-badge&logo=github&logoColor=white)](https://github.com/0GiS0)
+[![LinkedIn Follow](https://img.shields.io/badge/LinkedIn-Sígueme-blue?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/giselatorresbuitrago/)
+[![X Follow](https://img.shields.io/badge/X-Sígueme-black?style=for-the-badge&logo=x&logoColor=white)](https://twitter.com/0GiS0)
 
-Org: `AgenticGroot`
+</div>
 
-## Required GitHub App
-This implementation is **GitHub App only** (no PAT fallback).
+---
 
-### 1) Create + install the App
-Create a GitHub App and install it on the `AgenticGroot` organization.
+¡Hola developer 👋🏻! Este repositorio contiene un flujo de trabajo **IssueOps** para gestionar licencias de **GitHub Copilot Business/Enterprise** de forma automatizada. Permite asignar licencias mediante comentarios en issues y realizar limpieza automática de seats inactivos.
 
-**Important:** GitHub Docs for these Copilot billing endpoints explicitly mention OAuth/PAT scopes (preview) and do **not** state GitHub Apps are supported. If the API rejects GitHub App tokens (401/403), this automation will not work (by design).
+## 📑 Tabla de Contenidos
 
-### 2) App permissions (suggested starting point)
-You may need to iterate here depending on what GitHub accepts for these endpoints, but to support the checks we do:
-- Organization members: **Read** (for `GET /orgs/{org}/memberships/{actor}` and `GET /orgs/{org}/memberships/{username}`)
+- [Características](#-características)
+- [Cómo Funciona](#-cómo-funciona)
+- [Tecnologías](#️-tecnologías-utilizadas)
+- [Requisitos Previos](#-requisitos-previos)
+- [Configuración](#-configuración)
+- [Uso](#-uso)
+- [Estructura del Proyecto](#-estructura-del-proyecto)
+- [Notas Importantes](#-notas-importantes)
+- [Sígueme](#-sígueme-en-mis-redes-sociales)
 
-The Copilot seat call is:
-- `POST /orgs/{org}/copilot/billing/selected_users`
+## ✨ Características
 
-### 3) Repo configuration
-Set:
-- Repo variable: `COPILOT_APP_ID` (App ID)
-- Repo secret: `COPILOT_APP_PRIVATE_KEY` (PEM)
+- 🎫 **Asignación de licencias via IssueOps**: Los usuarios solicitan licencias creando issues
+- 🤖 **Automatización completa**: Los org owners asignan licencias con un simple comando
+- 🧹 **Limpieza automática**: Revoca licencias de usuarios inactivos (configurable)
+- 📊 **Reportes detallados**: Job summaries con información de seats asignados y revocados
+- 🔐 **Seguridad con GitHub Apps**: Autenticación mediante GitHub App (no PATs)
+- ✅ **Validación de membresía**: Verifica que el usuario sea miembro activo de la organización
 
-The workflow uses `actions/create-github-app-token@v2` to mint an installation token scoped to the `AgenticGroot` installation.
+## 🔄 Cómo Funciona
 
-### 4) Validation (recommended)
-Use the manual trigger to validate the App token can call the Copilot endpoints before relying on IssueOps:
-- Run workflow: **IssueOps: Assign Copilot seat**
-- `command`: `copilot-status` (or `copilot-assign`)
-- `username`: a test org member
+### Asignación de Licencias
 
-## Helper script (optional)
-There is a small helper at `scripts/assign-copilot-seat.sh` to run the same `gh api` calls locally.
+```mermaid
+flowchart LR
+    A[Usuario crea Issue] --> B[Org Owner comenta /copilot-assign]
+    B --> C{Validaciones}
+    C -->|Usuario válido| D[Asigna licencia]
+    C -->|Error| E[Comenta error]
+    D --> F[Cierra Issue con label]
+```
 
-## Notes
-- The Copilot seat endpoints are **preview** and may change.
-- The `/copilot-assign` path will comment + label and close the issue on success.
+1. Un usuario crea una solicitud usando el **Issue Template**: *Request GitHub Copilot seat*
+2. Un **organization owner** comenta en el issue:
+   - `.copilot-assign` → Usa el username del formulario
+   - `.copilot-assign @octocat` → Override explícito
+3. El workflow valida permisos, membresía y asigna la licencia
+
+### Limpieza de Seats Inactivos
+
+```mermaid
+flowchart LR
+    A[Cron diario 9:00 UTC] --> B[Busca seats inactivos]
+    B --> C{¿Hay inactivos?}
+    C -->|Sí| D[Revoca licencias]
+    C -->|No| E[Fin]
+    D --> F[Crea Issue de reporte]
+```
+
+- **Ejecución programada**: Diariamente a las 9:00 UTC (dry-run por defecto)
+- **Ejecución manual**: Con opción de dry-run y días de inactividad configurables
+
+## 🛠️ Tecnologías Utilizadas
+
+- **GitHub Actions** - Orquestación de workflows
+- **GitHub Apps** - Autenticación segura
+- **GitHub REST API** - Gestión de Copilot seats
+- **Bash** - Scripts de automatización
+- **JavaScript/Node.js** - Scripts de procesamiento
+- **GitHub Issue Templates** - Formularios de solicitud
+
+## 📋 Requisitos Previos
+
+- Organización con **GitHub Copilot Business** o **Enterprise**
+- Permisos de **Organization Owner**
+- **GitHub CLI** (`gh`) instalado (para scripts locales)
+
+## ⚙️ Configuración
+
+### 1. Crear GitHub App
+
+Crea una GitHub App e instálala en tu organización.
+
+> ⚠️ **Importante:** Los endpoints de Copilot billing están en preview. Si la API rechaza tokens de GitHub App (401/403), esta automatización no funcionará.
+
+### 2. Permisos de la App
+
+| Permiso | Nivel | Uso |
+|---------|-------|-----|
+| Organization members | Read | Validar membresía del usuario |
+| Issues | Write | Comentar y cerrar issues |
+
+### 3. Configurar Repositorio
+
+```bash
+# Variable
+gh variable set COPILOT_APP_ID --body "TU_APP_ID"
+
+# Secreto (el contenido del archivo .pem)
+gh secret set COPILOT_APP_PRIVATE_KEY < path/to/private-key.pem
+```
+
+### 4. Validar Configuración
+
+Ejecuta el workflow manualmente para validar:
+
+1. Ve a **Actions** → **Copilot seat cleanup (inactivity)**
+2. Click en **Run workflow**
+3. Selecciona `dry_run: true`
+4. Verifica que el token funciona correctamente
+
+## 💻 Uso
+
+### Solicitar una Licencia
+
+1. Ve a **Issues** → **New Issue**
+2. Selecciona **Request GitHub Copilot seat**
+3. Completa el formulario con el username
+4. Espera a que un org owner ejecute `.copilot-assign`
+
+### Comandos Disponibles (Org Owners)
+
+| Comando | Descripción |
+|---------|-------------|
+| `.copilot-assign` | Asigna licencia al usuario del issue |
+| `.copilot-assign @user` | Asigna licencia a un usuario específico |
+
+### Script Local (Opcional)
+
+```bash
+# Configurar variables
+export ORG="tu-organizacion"
+export GH_TOKEN="tu-token"
+
+# Verificar membresía
+./scripts/assign-copilot-seat.sh membership octocat
+
+# Ver estado de Copilot
+./scripts/assign-copilot-seat.sh status octocat
+
+# Asignar licencia
+./scripts/assign-copilot-seat.sh assign octocat
+```
+
+## 📁 Estructura del Proyecto
+
+```
+issueops-assign-ghcp-license/
+├── .github/
+│   ├── ISSUE_TEMPLATE/
+│   │   └── request-copilot-seat.yml    # Formulario de solicitud
+│   └── workflows/
+│       ├── issueops-assign-copilot-seat.yml  # Asignación via IssueOps
+│       └── copilot-seat-cleanup.yml          # Limpieza de inactivos
+├── scripts/
+│   ├── assign-copilot-seat.sh      # Helper para API calls
+│   ├── parse-issue-username.js     # Extrae username del issue
+│   ├── comment-and-close-issue.js  # Comenta y cierra issues
+│   ├── find-inactive-seats.sh      # Busca usuarios inactivos
+│   ├── revoke-inactive-seats.sh    # Revoca licencias
+│   ├── create-cleanup-issue.js     # Crea issue de reporte
+│   └── job-summary-cleanup.sh      # Genera job summary
+└── README.md
+```
+
+## 📝 Notas Importantes
+
+- Los endpoints de Copilot seat están en **preview** y pueden cambiar
+- El workflow de asignación comenta, etiqueta y cierra el issue automáticamente
+- La limpieza programada ejecuta en **dry-run** por defecto (solo reporta)
+- Para revocar licencias, ejecuta manualmente con `dry_run: false`
+
+## 🌐 Sígueme en Mis Redes Sociales
+
+Si te ha gustado este proyecto y quieres ver más contenido como este, no olvides suscribirte a mi canal de YouTube y seguirme en mis redes sociales:
+
+<div align="center">
+
+[![YouTube Channel Subscribers](https://img.shields.io/youtube/channel/subscribers/UC140iBrEZbOtvxWsJ-Tb0lQ?style=for-the-badge&logo=youtube&logoColor=white&color=red)](https://www.youtube.com/c/GiselaTorres?sub_confirmation=1)
+[![GitHub followers](https://img.shields.io/github/followers/0GiS0?style=for-the-badge&logo=github&logoColor=white)](https://github.com/0GiS0)
+[![LinkedIn Follow](https://img.shields.io/badge/LinkedIn-Sígueme-blue?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/giselatorresbuitrago/)
+[![X Follow](https://img.shields.io/badge/X-Sígueme-black?style=for-the-badge&logo=x&logoColor=white)](https://twitter.com/0GiS0)
+
+</div>

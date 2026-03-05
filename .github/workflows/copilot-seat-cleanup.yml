@@ -1,0 +1,195 @@
+name: "🧹 Copilot seat cleanup (inactivity)"
+
+on:
+  schedule:
+    # Runs daily at 9:00 UTC
+    - cron: "0 9 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (no revocations, just report)"
+        required: false
+        default: true
+        type: boolean
+      inactivity_days:
+        description: "Days of inactivity before revocation"
+        required: false
+        default: "30"
+        type: string
+
+permissions:
+  issues: write
+
+env:
+  ORG: ${{ github.repository_owner }}
+  API_VERSION: "2022-11-28"
+  INACTIVITY_DAYS: ${{ inputs.inactivity_days || '30' }}
+  DRY_RUN: ${{ inputs.dry_run || 'false' }}
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 🔑 Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.COPILOT_APP_ID }}
+          private-key: ${{ secrets.COPILOT_APP_PRIVATE_KEY }}
+          owner: ${{ env.ORG }}
+
+      - name: 🔍 Find inactive Copilot seats
+        id: find-inactive
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          
+          echo "Fetching Copilot seats for $ORG (inactivity threshold: $INACTIVITY_DAYS days)"
+          
+          # Calculate cutoff date
+          cutoff_date=$(date -d "-${INACTIVITY_DAYS} days" -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "Cutoff date: $cutoff_date"
+          
+          # Get all seats with pagination
+          page=1
+          all_seats="[]"
+          
+          while true; do
+            response=$(gh api \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: $API_VERSION" \
+              "/orgs/$ORG/copilot/billing/seats?per_page=100&page=$page" 2>&1) || {
+              echo "Error fetching seats: $response"
+              break
+            }
+            
+            seats=$(echo "$response" | jq -c '.seats // []')
+            count=$(echo "$seats" | jq 'length')
+            
+            if [[ "$count" -eq 0 ]]; then
+              break
+            fi
+            
+            all_seats=$(echo "$all_seats $seats" | jq -s 'add')
+            ((page++))
+          done
+          
+          total=$(echo "$all_seats" | jq 'length')
+          echo "Total seats: $total"
+          
+          # Find inactive users (last_activity_at is null or before cutoff)
+          inactive_users=$(echo "$all_seats" | jq -c --arg cutoff "$cutoff_date" '
+            [.[] | select(
+              .last_activity_at == null or 
+              .last_activity_at < $cutoff
+            ) | {
+              login: .assignee.login,
+              last_activity: (.last_activity_at // "never"),
+              created_at: .created_at
+            }]
+          ')
+          
+          inactive_count=$(echo "$inactive_users" | jq 'length')
+          echo "Inactive users: $inactive_count"
+          
+          # Save to outputs
+          echo "inactive_users<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$inactive_users" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          echo "inactive_count=$inactive_count" >> "$GITHUB_OUTPUT"
+          echo "total_seats=$total" >> "$GITHUB_OUTPUT"
+
+      - name: 🗑️ Revoke inactive seats
+        if: steps.find-inactive.outputs.inactive_count != '0'
+        id: revoke
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          INACTIVE_USERS: ${{ steps.find-inactive.outputs.inactive_users }}
+        run: |
+          set -euo pipefail
+          
+          revoked=""
+          failed=""
+          
+          for login in $(echo "$INACTIVE_USERS" | jq -r '.[].login'); do
+            echo "Processing: $login"
+            
+            if [[ "$DRY_RUN" == "true" ]]; then
+              echo "  [DRY RUN] Would revoke seat for $login"
+              revoked="${revoked}${login}\n"
+              continue
+            fi
+            
+            if gh api -X DELETE \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: $API_VERSION" \
+              "/orgs/$ORG/copilot/billing/selected_users" \
+              -f "selected_usernames[]=$login" 2>&1; then
+              echo "  ✅ Revoked seat for $login"
+              revoked="${revoked}${login}\n"
+            else
+              echo "  ❌ Failed to revoke seat for $login"
+              failed="${failed}${login}\n"
+            fi
+          done
+          
+          echo "revoked<<EOF" >> "$GITHUB_OUTPUT"
+          echo -e "$revoked" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          
+          echo "failed<<EOF" >> "$GITHUB_OUTPUT"
+          echo -e "$failed" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: 📝 Create summary issue
+        if: steps.find-inactive.outputs.inactive_count != '0'
+        uses: actions/github-script@v7
+        env:
+          INACTIVE_USERS: ${{ steps.find-inactive.outputs.inactive_users }}
+          INACTIVE_COUNT: ${{ steps.find-inactive.outputs.inactive_count }}
+          TOTAL_SEATS: ${{ steps.find-inactive.outputs.total_seats }}
+          REVOKED: ${{ steps.revoke.outputs.revoked }}
+          FAILED: ${{ steps.revoke.outputs.failed }}
+        with:
+          script: |
+            const inactive = JSON.parse(process.env.INACTIVE_USERS);
+            const dryRun = process.env.DRY_RUN === 'true';
+            const inactivityDays = process.env.INACTIVITY_DAYS;
+            
+            let table = '| User | Last Activity |\n|------|---------------|\n';
+            for (const u of inactive) {
+              table += `| @${u.login} | ${u.last_activity} |\n`;
+            }
+            
+            const title = dryRun 
+              ? `[Copilot] Inactivity report (${process.env.INACTIVE_COUNT} users)`
+              : `[Copilot] Revoked ${process.env.INACTIVE_COUNT} inactive seats`;
+            
+            const body = `## Copilot Seat Cleanup Report
+
+            **Organization:** ${process.env.ORG}
+            **Inactivity threshold:** ${inactivityDays} days
+            **Mode:** ${dryRun ? '🔍 Dry run (no changes)' : '🗑️ Revocations applied'}
+            **Total seats:** ${process.env.TOTAL_SEATS}
+            **Inactive users:** ${process.env.INACTIVE_COUNT}
+
+            ### Inactive Users
+
+            ${table}
+
+            ${dryRun ? '> ℹ️ This was a dry run. No seats were revoked.' : '> ✅ Seats have been revoked for the users listed above.'}
+            `.split('\n').map(l => l.trim()).join('\n');
+            
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+              labels: ['copilot-cleanup']
+            });
+
+      - name: ✅ No inactive users
+        if: steps.find-inactive.outputs.inactive_count == '0'
+        run: echo "No inactive Copilot seats found. All users are active! 🎉"

@@ -15,15 +15,26 @@
 
 ## 📑 Tabla de Contenidos
 
-- [Características](#-características)
-- [Cómo Funciona](#-cómo-funciona)
-- [Tecnologías](#️-tecnologías-utilizadas)
-- [Requisitos Previos](#-requisitos-previos)
-- [Configuración](#-configuración)
-- [Uso](#-uso)
-- [Estructura del Proyecto](#-estructura-del-proyecto)
-- [Notas Importantes](#-notas-importantes)
-- [Sígueme](#-sígueme-en-mis-redes-sociales)
+- [IssueOps: Gestión de Licencias GitHub Copilot](#issueops-gestión-de-licencias-github-copilot)
+  - [📑 Tabla de Contenidos](#-tabla-de-contenidos)
+  - [✨ Características](#-características)
+  - [🔄 Cómo Funciona](#-cómo-funciona)
+    - [Asignación de Licencias](#asignación-de-licencias)
+    - [Limpieza de Seats Inactivos](#limpieza-de-seats-inactivos)
+  - [🛠️ Tecnologías Utilizadas](#️-tecnologías-utilizadas)
+  - [📋 Requisitos Previos](#-requisitos-previos)
+  - [⚙️ Configuración](#️-configuración)
+    - [1. Crear GitHub App](#1-crear-github-app)
+    - [2. Permisos de la App](#2-permisos-de-la-app)
+    - [3. Configurar Repositorio](#3-configurar-repositorio)
+    - [4. Validar Configuración](#4-validar-configuración)
+  - [💻 Uso](#-uso)
+    - [Solicitar una Licencia](#solicitar-una-licencia)
+    - [Comandos Disponibles (Org Owners)](#comandos-disponibles-org-owners)
+    - [Script Local (Opcional)](#script-local-opcional)
+  - [📁 Estructura del Proyecto](#-estructura-del-proyecto)
+  - [📝 Notas Importantes](#-notas-importantes)
+  - [🌐 Sígueme en Mis Redes Sociales](#-sígueme-en-mis-redes-sociales)
 
 ## ✨ Características
 

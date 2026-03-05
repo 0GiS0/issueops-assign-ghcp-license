@@ -127,7 +127,34 @@ module.exports = async ({ github, context, core }) => {
 
   const body = sections.join('\n');
 
-  await github.rest.issues.create({
+  // --- Close previous cleanup issues ---
+  const openIssues = await github.paginate(github.rest.issues.listForRepo, {
+    owner,
+    repo,
+    state: 'open',
+    labels: 'copilot-cleanup',
+    per_page: 100,
+  });
+
+  const newIssue = await github.rest.issues.create({
     owner, repo, title, body, labels,
   });
+
+  const newNumber = newIssue.data.number;
+
+  for (const old of openIssues) {
+    await github.rest.issues.createComment({
+      owner,
+      repo,
+      issue_number: old.number,
+      body: `🔄 Superseded by #${newNumber}`,
+    });
+    await github.rest.issues.update({
+      owner,
+      repo,
+      issue_number: old.number,
+      state: 'closed',
+      state_reason: 'not_planned',
+    });
+  }
 };
